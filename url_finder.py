@@ -1,6 +1,7 @@
 import requests
 import urllib3
 from bs4 import BeautifulSoup, Comment
+import zmq
 
 class Navigator():
     HEADER = {
@@ -31,27 +32,33 @@ class UrlCollecter():
 
     def __init__(self,domain,port):
         self.main_domain = domain
-        self.url_list_in_each_site = list()
-        self.stop_flag = False
-        self.temporary_url_list = list()
-        self.url_list_in_each_site.append(domain)
+        self.url_list = list()
+        self.setup_communication(port)
 
-    def run(self):
-        self.add_urls_to_url_list(self.main_domain)
-        for url in self.url_list_in_each_site:
-            if self.stop_flag == True:
-                break
-            self.add_urls_to_url_list(url)
-            self.url_list_in_each_site.remove(url)
-            self.temporary_url_list.append(url)
-        
+    def setup_communication(self,port):
+        context = zmq.Context()
+        self.socket = context.socket(zmq.REP)
+        self.socket.bind('tcp://127.0.0.1:%d' %(port))
+
+    @classmethod
+    def run(cls,domain,port):
+        c = cls(domain,port)
+        c.add_urls_to_url_list(c.main_domain)
+        for url in c.url_list:
+            c.add_urls_to_url_list(url)
+            continue_or_not = c.socket.recv_string()
+            if continue_or_not == 'stop':
+                c.socket.send_pyobj((c.main_domain,c.url_list))
+                return
+            else:
+                c.socket.send_string(c.main_domain)        
+
     def add_urls_to_url_list(self,url):
         partial_url,html_text = Navigator.get_html(url)
         if partial_url == None:
             return 
         found_new_url_list = Parser.find_url_list(url,partial_url,html_text)
-        print('%s에 새로운 url %d개 발견 ' %(self.main_domain,len(found_new_url_list)))
-        self.url_list_in_each_site.extend(found_new_url_list)
+        self.url_list.extend(found_new_url_list)
             
 class Parser():
     @classmethod
@@ -75,6 +82,7 @@ class Parser():
 
     @classmethod
     def _find_url_in_href_tag(cls,tag_list):
+        """get url in href tag"""
         url_list = list()
         for tag in tag_list:
             if isinstance(tag,Comment):
@@ -90,6 +98,7 @@ class Parser():
 
     @classmethod
     def _make_united_url_list(cls,prefix_url,url_list):
+        """unite original url to found new url"""
         united_url_list = list()
         for url in url_list:
             if '.html' in url:
